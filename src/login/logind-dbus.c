@@ -32,6 +32,7 @@
 #include "parse-util.h"
 #include "path-util.h"
 #include "process-util.h"
+#include "reboot-util.h"
 #include "selinux-util.h"
 #include "sleep-config.h"
 #include "special.h"
@@ -2382,6 +2383,80 @@ static int method_can_suspend_then_hibernate(sd_bus_message *message, void *user
                         error);
 }
 
+static int property_get_reboot_argument(
+                sd_bus *bus,
+                const char *path,
+                const char *interface,
+                const char *property,
+                sd_bus_message *reply,
+                void *userdata,
+                sd_bus_error *error) {
+        _cleanup_free_ char *parameter = NULL;
+        int r;
+
+        assert(bus);
+        assert(reply);
+        assert(userdata);
+
+        r = get_reboot_parameter(&parameter);
+        if (r != 0)
+                return r;
+
+        return sd_bus_message_append(reply, "s", parameter);
+}
+
+static int method_set_reboot_argument(
+                sd_bus_message *message,
+                void *userdata,
+                sd_bus_error *error) {
+
+        Manager *m = userdata;
+        const char *arg;
+        int r;
+
+        assert(message);
+        assert(m);
+
+        r = sd_bus_message_read(message, "s", &arg);
+        if (r < 0)
+                return r;
+
+        r = verify_shutdown_creds(
+                        m,
+                        message,
+                        INHIBIT_SHUTDOWN,
+                        false,
+                        "org.freedesktop.login1.reboot",
+                        "org.freedesktop.login1.reboot-multiple-sessions",
+                        "org.freedesktop.login1.reboot-ignore-inhibit",
+                        error);
+        if (r != 0)
+                return r;
+
+        r = update_reboot_parameter_and_warn(arg, false);
+        if (r != 0)
+                return r;
+
+        return sd_bus_reply_method_return(message, NULL);
+}
+
+static int method_can_reboot_argument(
+                sd_bus_message *message,
+                void *userdata,
+                sd_bus_error *error) {
+
+        Manager *m = userdata;
+
+        return method_can_shutdown_or_sleep(
+                        m, message,
+                        INHIBIT_SHUTDOWN,
+                        "org.freedesktop.login1.reboot",
+                        "org.freedesktop.login1.reboot-multiple-sessions",
+                        "org.freedesktop.login1.reboot-ignore-inhibit",
+                        NULL,
+                        error);
+}
+
 static int property_get_reboot_to_firmware_setup(
                 sd_bus *bus,
                 const char *path,
@@ -3138,6 +3213,7 @@ const sd_bus_vtable manager_vtable[] = {
         SD_BUS_PROPERTY("KillOnlyUsers", "as", NULL, offsetof(Manager, kill_only_users), SD_BUS_VTABLE_PROPERTY_CONST),
         SD_BUS_PROPERTY("KillExcludeUsers", "as", NULL, offsetof(Manager, kill_exclude_users), SD_BUS_VTABLE_PROPERTY_CONST),
         SD_BUS_PROPERTY("KillUserProcesses", "b", NULL, offsetof(Manager, kill_user_processes), SD_BUS_VTABLE_PROPERTY_CONST),
+        SD_BUS_PROPERTY("RebootArgument", "s", property_get_reboot_argument, 0, 0),
         SD_BUS_PROPERTY("RebootToFirmwareSetup", "b", property_get_reboot_to_firmware_setup, 0, 0),
         SD_BUS_PROPERTY("RebootToBootLoaderMenu", "t", property_get_reboot_to_boot_loader_menu, 0, 0),
         SD_BUS_PROPERTY("RebootToBootLoaderEntry", "s", property_get_reboot_to_boot_loader_entry, 0, 0),
@@ -3214,6 +3290,8 @@ const sd_bus_vtable manager_vtable[] = {
         SD_BUS_METHOD("ScheduleShutdown", "st", NULL, method_schedule_shutdown, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_METHOD("CancelScheduledShutdown", NULL, "b", method_cancel_scheduled_shutdown, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_METHOD("Inhibit", "ssss", "h", method_inhibit, SD_BUS_VTABLE_UNPRIVILEGED),
+        SD_BUS_METHOD("CanRebootArgument", NULL, "s", method_can_reboot_argument, SD_BUS_VTABLE_UNPRIVILEGED),
+        SD_BUS_METHOD("SetRebootArgument", "s", NULL, method_set_reboot_argument, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_METHOD("CanRebootToFirmwareSetup", NULL, "s", method_can_reboot_to_firmware_setup, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_METHOD("SetRebootToFirmwareSetup", "b", NULL, method_set_reboot_to_firmware_setup, SD_BUS_VTABLE_UNPRIVILEGED),
         SD_BUS_METHOD("CanRebootToBootLoaderMenu", NULL, "s", method_can_reboot_to_boot_loader_menu, SD_BUS_VTABLE_UNPRIVILEGED),
